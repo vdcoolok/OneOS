@@ -3212,6 +3212,39 @@ if [ -f "$STAGE/OneOSPixelStatusBar.apk" ] && { [ -f "$GUEST_SYSTEM_EXT/priv-app
         echo "Pixel status bar overlay left out (ONEOS_GUEST_STATUSBAR_PADDING=0)"
     fi
 fi
+# LineageOS face: Samsung's face HAL refuses the guest's framework (enrollment
+# aborts with HAL error 1005, and cameraserver rejects Settings because the face
+# AIDL HAL pid is One UI's). facehal-rs registers IFace/default in the guest
+# instead; guest_start.sh stops sec-biometrics-face-aidl and runs it, and
+# return_to_oneui.sh starts Samsung's again. The payload is the phone vendor's
+# own matcher, staged from facehal_payload.tar. LineageOS 24 only: the tar is
+# shipped in that set, and other systems keep their own face HAL fix.
+if grep -qs '^ro.build.flavor=lineage_' "$ROOTFS/system/build.prop" &&
+   [ -f "$STAGE/facehal_payload.tar" ] && [ ! -L "$STAGE/facehal_payload.tar" ] &&
+   [ -d "$STAGE/data/local/tmp" ]; then
+    FH_TMP="$STAGE/data/local/tmp/.facehal_payload"
+    rm -rf "$FH_TMP"
+    if mkdir -p "$FH_TMP" && $BB tar -xf "$STAGE/facehal_payload.tar" -C "$FH_TMP" 2>/dev/null &&
+       [ -x "$FH_TMP/bin/hw/android.hardware.biometrics.face-service.facehal" ]; then
+        FH_DST="$STAGE/data/local/tmp/facehal"
+        FH_NEW=0
+        for f in bin/hw/android.hardware.biometrics.face-service.facehal \
+                 lib64/libfacehal_jni.so lib64/libjni_stfaceunlock_api.so \
+                 lib64/libtensorflowlite.so lib64/libtensorflowlite_gpu_delegate.so \
+                 lib64/libc++_shared.so; do
+            [ -f "$FH_TMP/$f" ] || continue
+            cmp -s "$FH_TMP/$f" "$FH_DST/$f" && continue
+            mkdir -p "$FH_DST/${f%/*}" || continue
+            cp -f "$FH_TMP/$f" "$FH_DST/$f" && chmod 755 "$FH_DST/$f" && FH_NEW=$((FH_NEW + 1))
+        done
+        if [ "$FH_NEW" -gt 0 ]; then
+            chown -R 0:0 "$FH_DST" 2>/dev/null || true
+            $BB chcon -R u:object_r:shell_data_file:s0 "$FH_DST" 2>/dev/null || true
+            echo "LineageOS face: facehal-rs staged at /data/local/tmp/facehal ($FH_NEW file(s))"
+        fi
+    fi
+    rm -rf "$FH_TMP"
+fi
 # AOD for a Pixel guest (switcher/overlays/pixel_doze): Pixel's doze service and
 # "AOD available", which a Pixel has in its vendor overlay and a guest on One
 # UI's vendor had not (getDozeComponent()=null). Static, so the dream manager

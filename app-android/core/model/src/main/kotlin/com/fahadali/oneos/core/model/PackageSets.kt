@@ -845,9 +845,12 @@ object PackageSets {
             // phones (samcam_a.tar), the S26 Ultra's for the bar phones (samcam_bar.tar); and the current guest app,
             // which knows LineageOS (r5's showed the ColorOS artwork).
             PackageFile("samcam_a.tar", FileRole.GUEST_FIX) +
-            PackageFile("samcam_bar.tar", FileRole.GUEST_FIX),
+            PackageFile("samcam_bar.tar", FileRole.GUEST_FIX) +
+            // r11: the face HAL (facehal-rs) and Samsung's five vendor libraries; guest_prepare.sh stages
+            // it for the guest, whose framework Samsung's own face HAL refuses.
+            PackageFile("facehal_payload.tar", FileRole.GUEST_FIX),
         omitted = listOf(TETHERING, CELLBROADCAST),
-        approxBytes = 387_175_398L + 8_538L + 118_120L + 80_271_360L + 78_120_960L,
+        approxBytes = 387_175_398L + 8_538L + 118_120L + 80_271_360L + 78_120_960L + 40_304_640L,
         hasReturnApp = true,
     )
 
