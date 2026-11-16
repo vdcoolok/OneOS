@@ -3212,6 +3212,37 @@ if [ -f "$STAGE/OneOSPixelStatusBar.apk" ] && { [ -f "$GUEST_SYSTEM_EXT/priv-app
         echo "Pixel status bar overlay left out (ONEOS_GUEST_STATUSBAR_PADDING=0)"
     fi
 fi
+# Face enrollment's camera (scripts/make-overlays.sh,
+# switcher/overlays/face_hal_camera): Settings ships
+# bool/config_face_enroll_hal_owns_camera=false, so FaceEnrollPreviewFragment
+# opens the front camera for its own preview and hands the face HAL no surface;
+# facehal-rs then cannot open the same camera (CAMERA_IN_USE for the front
+# camera, MAX_CAMERAS_IN_USE for the rest) and the enrollment ends before the
+# preview ("FaceHAL enroll: camera open failed: Unavailable"). The RRO sets it
+# true: the fragment shows the SurfaceView the HAL renders into and enrollment
+# starts once that surface exists. LineageOS 24 only; left out when one of the
+# image's own overlays already sets the resource. ONEOS_GUEST_FACE_CAMERA=0
+# leaves it out.
+if [ -f "$STAGE/OneOSFaceHalCamera.apk" ] && [ "${ONEOS_GUEST_FACE_CAMERA:-1}" = 1 ] &&
+   grep -qs '^ro.build.flavor=lineage_' "$ROOTFS/system/build.prop"; then
+    FACE_CAM_OTHER=""
+    for d in "$ROOTFS/system/overlay" "$GUEST_SYSTEM_EXT/overlay" "$GUEST_PRODUCT/overlay" \
+             "$ROOTFS/vendor/overlay" "$ROOTFS/odm/overlay"; do
+        for a in "$d"/*.apk; do
+            if [ -f "$a" ] && grep -qs config_face_enroll_hal_owns_camera "$a"; then
+                FACE_CAM_OTHER="$FACE_CAM_OTHER ${a#$ROOTFS}"
+            fi
+        done
+    done
+    if [ -n "$FACE_CAM_OTHER" ]; then
+        echo "Face camera: the image's own overlay sets it ($FACE_CAM_OTHER), ours left out"
+    else
+        mkdir -p "$STAGE/oem/overlay" &&
+            cp "$STAGE/OneOSFaceHalCamera.apk" "$STAGE/oem/overlay/" &&
+            chmod 755 "$STAGE/oem" "$STAGE/oem/overlay" && chmod 644 "$STAGE/oem/overlay/OneOSFaceHalCamera.apk" &&
+            OEM_FILES="$OEM_FILES overlay/OneOSFaceHalCamera.apk"
+    fi
+fi
 # LineageOS face: Samsung's face HAL refuses the guest's framework (enrollment
 # aborts with HAL error 1005, and cameraserver rejects Settings because the face
 # AIDL HAL pid is One UI's). facehal-rs registers IFace/default in the guest

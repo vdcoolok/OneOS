@@ -817,7 +817,7 @@ object PackageSets {
     val LINEAGE = PackageSet(
         id = ID_LINEAGE,
         imageId = Images.ID_LINEAGE,
-        sourceDir = "out/overlays_lineage_r7",
+        sourceDir = "out/overlays_lineage_r10",
         files = listOf(
             PackageFile("services_patched.jar", FileRole.GUARD_JAR),
             PackageFile("framework_patched.jar", FileRole.GUARD_JAR),
@@ -848,9 +848,12 @@ object PackageSets {
             PackageFile("samcam_bar.tar", FileRole.GUEST_FIX) +
             // r11: the face HAL (facehal-rs) and Samsung's five vendor libraries; guest_prepare.sh stages
             // it for the guest, whose framework Samsung's own face HAL refuses.
-            PackageFile("facehal_payload.tar", FileRole.GUEST_FIX),
+            PackageFile("facehal_payload.tar", FileRole.GUEST_FIX) +
+            // r12: Settings' bool/config_face_enroll_hal_owns_camera (the image ships false, so the enrollment
+            // preview opened the camera the face HAL needs); switcher/overlays/face_hal_camera.
+            PackageFile("OneOSFaceHalCamera.apk", FileRole.RRO),
         omitted = listOf(TETHERING, CELLBROADCAST),
-        approxBytes = 387_175_398L + 8_538L + 118_120L + 80_271_360L + 78_120_960L + 40_304_640L,
+        approxBytes = 387_175_398L + 8_538L + 118_120L + 80_271_360L + 78_120_960L + 40_304_640L + 8_538L,
         hasReturnApp = true,
     )
 

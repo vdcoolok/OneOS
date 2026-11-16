@@ -6,11 +6,13 @@
 # 0.5.07 r4: services_patched.jar with patches/guest_sp_migration_tolerant.py (a synthetic password Keystore refuses no longer stops system_server; S26 Ultra b5edb256)
 # 0.5.10 r5: services_patched.jar + patches/guest_local_lock.py (the guest's own screen lock; LineageOS keeps getCredentialType's answer in p0), scripts/patch-built-jar.sh on r4's jar
 # 0.5.17 r8: services_patched.jar + patches/guest_local_lock_hat.py on r5's jar (the guest lock's gatekeeper handle, so Settings' face enrollment gets a token), 2026-11-16
-d335963dc816184ebe63b0782feda48c8bc460df9db53392c741f7a5256d7d5c  services_patched.jar
+# 0.5.14 r6: the current OneOSGuest.apk (LineageOS artwork); samcam_a.tar (the Galaxy A36's Samsung Camera, One UI 9 A366BXXUCDZIF) and samcam_bar.tar (the S26 Ultra's) built for this image with scripts/samsung-camera/build-cached.sh, guest_prepare.sh picks one per phone
+# r7 (0.5.15): framework_patched.jar also lets Samsung Camera's slow motion open its three-output high-speed session (switcher/patches/samsung_highspeed_surfaces.py); samcam_a.tar's oneos-camera-compat.jar has SemMediaResourceHelper without its native library (video, hyperlapse, slow motion on the A-series camera).
+# 0.5.20 r12: OneOSFaceHalCamera.apk (config_face_enroll_hal_owns_camera, so the enrollment preview is the
+# face HAL's and not Settings' own camera), 2026-11-17
+2ddc8634aee9b7bd0d46aaf24bff01e59408526002fd22a2001943d617a1a8e4  services_patched.jar
 edcf391437b107dc9a86a5c1435c7aba9a572373344aa62d9c972c7ab2d36dc2  vold_patched
 0235d2312e659dfb00b7bab3e6b8189e36ccd2b61d1c298f01347e8d4615bc5d  service.incremental_patched.so
-8eeb43db3299c6735887582769f69d78fbd09a7f24c12b919d5c7017639da6db  telephony-common_patched.jar
+c604744bef59e8e7096df114bb5791eec5a12472e764361baa5f764099fb330c  framework_patched.jar
+62f96ab87b2dd20095b84fe44b2f55443069610641c6fcfdb616651b742434a4  telephony-common_patched.jar
 a736ff42026ee1b6e5095349f21bfa5b01d5e765d8a2c87c05047e4798c95984  libcamera_client_patched.so
-# 0.5.14 r6: the current OneOSGuest.apk (LineageOS artwork); samcam_a.tar (the Galaxy A36's Samsung Camera, One UI 9 A366BXXUCDZIF) and samcam_bar.tar (the S26 Ultra's) built for this image with scripts/samsung-camera/build-cached.sh, guest_prepare.sh picks one per phone
-7d8a358c209adedab8d5c29ce78f8229a0c1d6ffa8932f9b86390343435d0670  framework_patched.jar
-# r7 (0.5.15): framework_patched.jar also lets Samsung Camera's slow motion open its three-output high-speed session (switcher/patches/samsung_highspeed_surfaces.py); samcam_a.tar's oneos-camera-compat.jar has SemMediaResourceHelper without its native library (video, hyperlapse, slow motion on the A-series camera).

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Face enrollment's camera. Lineage's Settings decides who opens the front
+     camera from bool/config_face_enroll_hal_owns_camera, and the image ships
+     false: FaceEnrollPreviewFragment opens the camera for its own preview and
+     the face HAL gets no surface, so the guest's face HAL (facehal-rs, staged
+     by guest_prepare.sh) cannot open the same camera and enrollment stops
+     before the preview. make-overlays.sh sets the bool to true here and
+     guest_prepare.sh puts the APK in the guest's /oem/overlay. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="oneos.overlay.face.hal.camera">
+    <application android:hasCode="false"/>
+    <overlay android:targetPackage="com.android.settings"
+        android:isStatic="true"
+        android:priority="1"/>
+</manifest>

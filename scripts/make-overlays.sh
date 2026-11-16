@@ -1454,6 +1454,60 @@ else
     echo "SystemUIGoogle.apk (or an AOSP SystemUI.apk): not in the image, no status bar overlay"
 fi
 
+# Face enrollment's camera. Lineage's Settings picks who opens the front camera
+# from bool/config_face_enroll_hal_owns_camera, and the image ships false:
+# FaceEnrollPreviewFragment opens the camera for its own preview and hands the
+# HAL no surface, so the guest's face HAL (facehal-rs, staged by
+# guest_prepare.sh) cannot open the same camera - CAMERA_IN_USE for the front
+# one and MAX_CAMERAS_IN_USE for the rest, and FaceEnrollClient finishes with an
+# error before the preview: "FaceHAL enroll: camera open failed: Unavailable".
+# With true the fragment shows the SurfaceView the HAL renders into and
+# enrollment waits for that surface, the path OEM face HALs use. This static
+# RRO (switcher/overlays/face_hal_camera) sets it; guest_prepare.sh puts the APK
+# in the guest's /oem/overlay unless one of the image's own overlays already
+# sets the resource. LineageOS 24 only.
+FACE_RRO="$ROOT/switcher/overlays/face_hal_camera"
+rm -f "$OUT/OneOSFaceHalCamera.apk"
+if "$DEBUGFS" -R "cat /system/build.prop" "$IMG" 2>/dev/null | grep -q '^ro.build.flavor=lineage_'; then
+    SETTINGS_APK=""
+    for p in /system/system_ext/priv-app/Settings/Settings.apk /system/priv-app/Settings/Settings.apk; do
+        in_image "$p" && { SETTINGS_APK=$p; break; }
+    done
+    if [ -z "$SETTINGS_APK" ]; then
+        echo "Settings.apk: not in the image, no face camera overlay"
+    else
+        "$DEBUGFS" -R "dump $SETTINGS_APK $WORK/Settings.apk" "$IMG" 2>/dev/null
+        "$BT/aapt2" dump resources "$WORK/Settings.apk" > "$WORK/settings_res.txt" 2>/dev/null || true
+        FACE_CAM=$(awk '/^ *resource 0x/ { cur = ($3 == "bool/config_face_enroll_hal_owns_camera"); next }
+                        cur && /^ *\(/ { print $2; exit }' "$WORK/settings_res.txt")
+        if [ -z "$FACE_CAM" ]; then
+            echo "$(basename "$SETTINGS_APK"): no bool/config_face_enroll_hal_owns_camera, face camera overlay not built"
+        elif [ "$FACE_CAM" = true ]; then
+            echo "$(basename "$SETTINGS_APK"): config_face_enroll_hal_owns_camera is already true, face camera overlay not built"
+        else
+            rm -rf "$WORK/facecam-res" "$WORK/facecam.zip" "$WORK/facecam.apk"
+            cp -R "$FACE_RRO/res" "$WORK/facecam-res"
+            "$BT/aapt2" compile --dir "$WORK/facecam-res" -o "$WORK/facecam.zip"
+            "$BT/aapt2" link -o "$WORK/facecam.apk" -I "$AJ" --manifest "$FACE_RRO/AndroidManifest.xml" \
+                --min-sdk-version 35 --target-sdk-version 36 --no-resource-deduping "$WORK/facecam.zip"
+            if ! "$BT/aapt2" dump resources "$WORK/facecam.apk" 2>/dev/null |
+                 grep -A2 'bool/config_face_enroll_hal_owns_camera' | grep -qE '^ *\(\) +true$'; then
+                echo "face_hal_camera overlay: the built APK does not set config_face_enroll_hal_owns_camera to true:" >&2
+                "$BT/aapt2" dump resources "$WORK/facecam.apk" | grep -A2 'config_face_enroll_hal_owns_camera' >&2
+                exit 1
+            fi
+            "$BT/zipalign" -p -f 4 "$WORK/facecam.apk" "$WORK/facecam-aligned.apk"
+            "$BT/apksigner" sign --ks "${KEYSTORE:-$HOME/.android/debug.keystore}" \
+                --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android \
+                --out "$OUT/OneOSFaceHalCamera.apk" "$WORK/facecam-aligned.apk"
+            rm -f "$OUT/OneOSFaceHalCamera.apk.idsig"
+            echo "built $OUT/OneOSFaceHalCamera.apk (config_face_enroll_hal_owns_camera true)"
+        fi
+    fi
+else
+    echo "Face camera overlay: not a LineageOS 24 image (ro.build.flavor is not lineage_)"
+fi
+
 # Patch one dex of a system APK and splice it back with the signing block as
 # it was (scripts/apk-replace-dex.py): PackageManager does not check the digests
 # of an APK on a system partition and still reads the platform certificate.

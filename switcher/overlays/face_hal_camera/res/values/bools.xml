@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The face HAL opens the camera and renders its preview into the SurfaceView
+     Settings hands it; with false, Settings opens the camera itself and the
+     HAL gets no surface. -->
+<resources>
+    <bool name="config_face_enroll_hal_owns_camera">true</bool>
+</resources>

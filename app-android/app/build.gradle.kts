@@ -86,7 +86,7 @@ val packageSets: Map<String, Pair<File, List<String>>> = linkedMapOf(
     // LineageOS 24 (0.5.06, experimental): the OnePlus 15 nightly, on every phone that offers Infinity-X. No gmssystem
     // payload (One UI's Google apps are laid over the guest at session time). Tethering never mounts; its source-built
     // cellbroadcast module is left out like Infinity-X's.
-    "lineage" to (File(repoRoot, "out/overlays_lineage_r7") to listOf("tethering_payload.img", "cellbroadcast_payload.img")),
+    "lineage" to (File(repoRoot, "out/overlays_lineage_r10") to listOf("tethering_payload.img", "cellbroadcast_payload.img")),
 )
 // The series downloads (0.4.25): -Poneos.series=<id> packs only the sets that
 // app-android/packages/series.txt lists for it (ApkSeries keeps the same lists,

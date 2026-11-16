@@ -5,6 +5,8 @@
 # app/build.gradle.kts packs exactly these files into the APK and fails the build when out/overlays_lineage_r6 differs.
 # 0.5.14 r6: r5 with the current OneOSGuest.apk and Samsung Camera (samcam_a.tar for A/M phones, samcam_bar.tar for bar phones).
 # 0.5.15 r7: framework_patched.jar with Samsung slow motion's three-output high-speed session; samcam_a.tar without libmediaresourcehelper (A-series video).
+# 0.5.20 r12: OneOSFaceHalCamera.apk: Settings' bool/config_face_enroll_hal_owns_camera (the image ships
+# false, so the enrollment preview took the front camera and the guest's face HAL could not open it), 2026-11-17.
 # 0.5.20 r11: facehal_payload.tar (the guest face HAL and Samsung's five vendor libraries; Samsung's own
 # face HAL refuses the guest's framework), 2026-11-16.
 f95741ab892c3237489d610d3fc9e05c52da2e27bfb41858d5cbf9b475be27b1  OneOSFoldCutout.apk
@@ -48,3 +50,4 @@ e47bdd2692863f919b63b1e995d581a32714058558c68473bbc44136724dd7f7  telephonycore_
 edcf391437b107dc9a86a5c1435c7aba9a572373344aa62d9c972c7ab2d36dc2  vold_patched
 5792ef451f842b008ead2fdb849535b5135d3cff5b181cf1cc1e9341eaaaba1e  wifi_payload.img
 5a4655ffa73f96c63b2559f2825b6b9e32e15416f6ee906923e78eba9ecde357  facehal_payload.tar
+40f3d200c41017e34c6b35ec475399512c98154e6ac3d091f5066e161a3bf5b4  OneOSFaceHalCamera.apk
