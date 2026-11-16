@@ -273,7 +273,9 @@ PA_CTX=$(getprop -Z persist.sys.disable_rescue 2>/dev/null)
 PA_DEF=$(getprop -Z oneos.unknown.name.probe 2>/dev/null)
 PA_NEED_CTX=16384; PA_NEED_DEF=16384
 if grep -q ' vivo-services_patched\.jar$' "$STAGE/guards.txt" 2>/dev/null; then
-    PA_NEED_CTX=32768; PA_NEED_DEF=98304
+    # 0.5.17: 72 KB, not 96 (S25 5e098b17: 86 KB left right after a restart, refused at every try; OriginOS
+    # had started on S25s before). The first session after a restart fits the 45-95 KB it adds.
+    PA_NEED_CTX=32768; PA_NEED_DEF=73728
     # A vivo session earlier in this boot left those names blanked in memory
     # (guest_props.sh store-on): the next one writes into the same slots.
     if [ "$(cat "$STAGE/guest_props.blanked.boot" 2>/dev/null)" = "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" ] &&
@@ -284,6 +286,11 @@ fi
 for PA_FILE in "/dev/__properties__/${PA_CTX:-u:object_r:system_prop:s0}" "/dev/__properties__/${PA_DEF:-u:object_r:default_prop:s0}"; do
     PA_NEED=$PA_NEED_CTX; [ "$PA_FILE" = "/dev/__properties__/${PA_DEF:-u:object_r:default_prop:s0}" ] && PA_NEED=$PA_NEED_DEF
     if PA_LEFT=$(pa_free "$PA_FILE"); then
+        # No OneOS session since the phone restarted: a restart cannot help, this phone's One UI leaves too
+        # little room for this system (0.5.17, S25 5e098b17 restarted many times and got the same refusal).
+        if [ "$PA_LEFT" -lt "$PA_NEED" ] && [ "$(cat "$STAGE/guest_props.boot" 2>/dev/null)" != "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" ]; then
+            refuse "This phone's One UI leaves too little property space for this system, even right after a restart ($((PA_LEFT / 1024)) KB left in ${PA_FILE##*/}, it needs $((PA_NEED / 1024)) KB). Choose another system; please send a report so we can look at it"
+        fi
         [ "$PA_LEFT" -ge "$PA_NEED" ] ||
             refuse "One UI's property space is nearly full ($((PA_LEFT / 1024)) KB left in ${PA_FILE##*/}): the sessions since the phone last restarted used it up. Restart the phone, then switch again"
         [ "$PA_LEFT" -ge 49152 ] || echo "WARNING: One UI's property space is getting full ($((PA_LEFT / 1024)) KB left in ${PA_FILE##*/}); some of the other system's settings may not load. Restart the phone before the next session"
@@ -406,14 +413,23 @@ setprop oneos.guest.powerctl "" 2>/dev/null
 # one as soon as it starts.
 GUEST_RETURN_REQ="$STAGE/data/user/0/com.fahadali.oneos.guest/files/oneos_return"
 GUEST_RESTART_REQ="$STAGE/data/user/0/com.fahadali.oneos.guest/files/oneos_restart"
-rm -f "$GUEST_RETURN_REQ" "$GUEST_RESTART_REQ"
+# 0.5.17 (owner: full logs off by default, "can they enable them from guest app inside the OS and then
+# it starts?"): Record full logs from now in the guest's OneOS app is a third request file there; the
+# watcher below starts the session's full capture on it and says so in /data/oneos_bootui/full_logs.
+GUEST_FULLLOGS_REQ="$STAGE/data/user/0/com.fahadali.oneos.guest/files/oneos_full_logs"
+FULLLOGS_STATE="$STAGE/data/oneos_bootui/full_logs"
+rm -f "$GUEST_RETURN_REQ" "$GUEST_RESTART_REQ" "$GUEST_FULLLOGS_REQ"
+# An earlier session's mark (it would make this session's report look like full logs were on).
+rm -f "$STAGE/full_logs_mid.log"
 # One UI's protected state, recorded now and compared by return_to_oneui.sh:
 # the FRP partition, gatekeeper's files and the APEX state. The guest is kept
 # off all three (patches/guest_no_gatekeeper.py, guest_pdb_readonly.py,
 # guest_no_apex_installs.py); a difference means a path the guards missed.
 # Read only; it only logs.
 host_state() {
-    f=$(readlink -f "$(getprop ro.frp.pst)" 2>/dev/null)
+    # One UI's FRP partition: the session points ro.frp.pst at the guest's own block (guest_props.sh).
+    f=$(cat "$STAGE/host_frp_pst" 2>/dev/null); [ -n "$f" ] || f=$(getprop ro.frp.pst)
+    f=$(readlink -f "$f" 2>/dev/null)
     [ -b "$f" ] && echo "frp $(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)"
     for p in /data/misc/gatekeeper /data/apex/active /data/apex/sessions; do
         [ -d "$p" ] && find "$p" -type f -exec stat -c '%n %s %Y' {} + 2>/dev/null | sort
@@ -495,6 +511,9 @@ echo "preflight: display hline done $(date +%T)"
 # display preflight's 10 s was.
 cut_after "$HLINE" 'CutoutPathParserInfo{displayWidth=' ' '; HDW=$R
 cut_after "$HLINE" 'physicalDisplayWidth=' ' '; HPW=$R
+# 0.5.17: the height One UI runs the panel at (the Nothing power key's position, in the UI activator).
+cut_after "$HLINE" 'CutoutPathParserInfo{displayWidth=' '}'; HDH=${R#*displayHeight=}; HDH=${HDH%% *}
+case "$HDH" in ''|*[!0-9]*) HDH='' ;; esac
 # Each panel's camera on the whole panel (the guests in the reports run every
 # panel at its full size; guest_panel_fit.sh for one that does not), one line
 # per internal panel with a top cutout, in host_holes:
@@ -818,6 +837,7 @@ if [ "${ONEOS_LOGCAT:-1}" = 1 ] && [ "${ONEOS_FULL_LOGS:-1}" != 1 ]; then
         rm -rf "$LOGS.prev"; [ -d "$LOGS" ] && mv "$LOGS" "$LOGS.prev"
     fi
     echo "Logcat capture: off (Full session logs off in the app)"
+    if [ -d "$STAGE/data/oneos_bootui" ]; then echo 0 > "$FULLLOGS_STATE" && chmod 644 "$FULLLOGS_STATE"; fi
 elif [ "${ONEOS_LOGCAT:-1}" = 1 ]; then
     # pgrep -f matches the same "^logcat ... boot.log" command line in one
     # process. The loop it replaces forked tr and grep for each of ~1100 pids:
@@ -837,6 +857,7 @@ elif [ "${ONEOS_LOGCAT:-1}" = 1 ]; then
         LOGCAT_HEAD=1
         echo "Logcat capture: $LOGS/boot.log"
     fi
+    if [ -d "$STAGE/data/oneos_bootui" ]; then echo 1 > "$FULLLOGS_STATE" && chmod 644 "$FULLLOGS_STATE"; fi
 fi
 # Sound and vibration watch (0.4.58): rings, vibrations, audio effects and
 # crashes of the session in a small log of its own ($STAGE/sound_watch.log,
@@ -1402,7 +1423,9 @@ kill -9 $(pidof system_server) 2>/dev/null || true
 # 47 s for the guest's permission service, and init rebooted the phone right after ("reboot,vold-failed",
 # 0.4.69 A15 c2da41ee: dumpstate pid 10916, "Check passed after 47063ms", shutdown 0.3 s later).
 rm -f "$STAGE/data/guest_audio.flag"
-nohup $BB sh -c "while true; do [ \"\$(getprop init.svc.zygote)\" = \"running\" ] && setprop ctl.stop zygote; [ \"\$(getprop init.svc.zygote_secondary)\" = \"running\" ] && setprop ctl.stop zygote_secondary; [ ! -f $STAGE/data/oneos_host_sf_frozen ] && [ \"\$(getprop init.svc.surfaceflinger)\" = \"running\" ] && setprop ctl.stop surfaceflinger; [ \"\$(getprop init.svc.bootanim)\" = \"running\" ] && setprop ctl.stop bootanim; [ -f $STAGE/data/guest_audio.flag ] && [ \"\$(getprop init.svc.audioserver)\" = \"running\" ] && setprop ctl.stop audioserver; for s in dumpstate dumpstatez bugreport bugreportd; do [ \"\$(getprop init.svc.\$s)\" = \"running\" ] && setprop ctl.stop \$s; done; sleep 0.2; done" </dev/null >/dev/null 2>&1 &
+# 0.5.18 (owner, A36: Nothing OS sluggish): 9 getprop processes every 0.2 s were about 9 % of a core all session.
+# Zygote and surfaceflinger still every 0.2 s; bootanim, audioserver and the dump services every second.
+nohup $BB sh -c "n=0; while true; do [ \"\$(getprop init.svc.zygote)\" = \"running\" ] && setprop ctl.stop zygote; [ ! -f $STAGE/data/oneos_host_sf_frozen ] && [ \"\$(getprop init.svc.surfaceflinger)\" = \"running\" ] && setprop ctl.stop surfaceflinger; n=\$((n + 1)); if [ \$n -ge 5 ]; then n=0; [ \"\$(getprop init.svc.zygote_secondary)\" = \"running\" ] && setprop ctl.stop zygote_secondary; [ \"\$(getprop init.svc.bootanim)\" = \"running\" ] && setprop ctl.stop bootanim; [ -f $STAGE/data/guest_audio.flag ] && [ \"\$(getprop init.svc.audioserver)\" = \"running\" ] && setprop ctl.stop audioserver; for s in dumpstate dumpstatez bugreport bugreportd; do [ \"\$(getprop init.svc.\$s)\" = \"running\" ] && setprop ctl.stop \$s; done; fi; sleep 0.2; done" </dev/null >/dev/null 2>&1 &
 sleep 1
 # The session's own copy of One UI's property store, now that One UI's
 # framework is down (guest_props.sh store-on): the guest's persist settings
@@ -1492,6 +1515,15 @@ ls -l /vendor/etc/displayconfig /vendor/odm/etc/displayconfig /vendor/odm/etc/de
       echo "== $b"; strings -a "$b" 2>/dev/null | grep -E '^/sys/|enabled|fold_state' | head -40
   done
 } > "$STAGE/diag_host/touch_nodes.txt" 2>&1
+# The panel's local HBM (in-house optical fingerprint spot, Galaxy A/S with an optical sensor): One UI's fingerprint
+# service leaves it at 1 (on, source off) while its keyguard waits for a finger, and the panel then draws its own
+# glowing circle over whatever is shown (A36, fresh Nothing OS, 0.5.18: from the guest's boot animation on, owner:
+# "glowing like hell"). One UI's service is stopped now: the panel starts the guest with it off.
+LHBM=/sys/class/lcd/panel/local_hbm
+if [ -w "$LHBM" ]; then
+    v=$(cat "$LHBM" 2>/dev/null)
+    case "$v" in 0|'') ;; *) echo 0 > "$LHBM" 2>/dev/null; echo "Panel local HBM was $v at the switch (One UI's fingerprint wait): now $(cat "$LHBM" 2>/dev/null)" ;; esac
+fi
 echo "=== [5/6] $(date +%T) Executing Mount Hierarchy Preparation ==="
 /system/bin/sh "$STAGE/guest_prepare.sh"
 PREP_RET=$?
@@ -2086,7 +2118,35 @@ GUEST_OXYGEN=0; grep -q '^  "image": "oxygenos' "$STAGE/.oneos_stage" 2>/dev/nul
 # Start UI Activator daemon. One pass per boot of the guest: after a soft
 # reboot of it (guest_softreboot.sh bumps tmp/softreboot.gen, 0.4.39) the
 # same steps run again for the new boot; it ends with the session.
-$BB sh -c "
+# Essential Space from the Volume Down double press (0.5.17; run by oneos_essential_key, see the UI activator):
+# open it in the guest; once, mark its first-run page done (skip_onboarding true in its DataStore), since that page
+# waits for a double click of Nothing's own key, which a Galaxy cannot send through (owner's A36). Only the one
+# boolean is changed, and only when it reads exactly false; the app is stopped first so it reads it again.
+if [ -e "$STAGE/rootfs/system_ext/framework/nt-telephony-common.jar" ] && [ -d "$STAGE/data" ]; then
+    cat > "$STAGE/data/oneos_essential_open.sh" <<'ESSOPEN'
+#!/system/bin/sh
+# oneos_essential_open.sh <guest system_server pid> <busybox>
+P=$1; BB=$2
+G="$BB nsenter -t $P -m /system/bin/sh /data/oneos_genv.sh"
+F=/data/local/tmp/oneos/data/user/0/com.nothing.ntessentialspace/files/datastore/essential_raw_data.preferences_pb
+if [ -f "$F" ] && [ ! -L "$F" ]; then
+    o=$($BB grep -abo skip_onboarding "$F" | head -n 1 | cut -d: -f1)
+    case "$o" in ''|*[!0-9]*) ;; *)
+        if [ "$($BB dd if="$F" bs=1 skip=$((o + 15)) count=4 2>/dev/null | $BB od -An -tx1 | tr -d ' \n')" = 12020800 ]; then
+            $G /system/bin/am force-stop com.nothing.ntessentialspace
+            printf '\001' | $BB dd of="$F" bs=1 seek=$((o + 18)) count=1 conv=notrunc 2>/dev/null &&
+                echo "Essential Space: first-run page marked done"
+        fi ;;
+    esac
+fi
+$G /system/bin/am start -n com.nothing.ntessentialspace/.MainActivity >/dev/null 2>&1
+ESSOPEN
+    chmod 700 "$STAGE/data/oneos_essential_open.sh"
+fi
+# 0.5.18: kept in a variable, written to a file through a here-document (no argument: /system/bin/sh's printf is a
+# program) and run from there. As `sh -c "<script>"` it hit the kernel's 128 KiB limit for one argument once it grew
+# past it (A36, Nothing: "Argument list too long", no status bar, power key or cutout overlays that session).
+UIA="
 BB=\"$BB\"
 [ -n \"\$BB\" ] || BB=\$(which busybox 2>/dev/null || echo /data/adb/ksu/bin/busybox)
 GEN=\$(cat $STAGE/tmp/softreboot.gen 2>/dev/null); PASS=1; BRPID=''
@@ -2444,6 +2504,15 @@ while true; do
                 ($BB nohup $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/env CLASSPATH=/data/oneos_edm_stub.dex /system/bin/app_process /system/bin OneOSEdmStub \$PID > $STAGE/edm_stub.log 2>&1 </dev/null &)
                 sleep 2
                 echo \"[UI Activator] Knox edm stub: \$(head -n 1 $STAGE/edm_stub.log 2>/dev/null | tr -d '\n' || true); \$(timeout 10 service check edmnativehelper 2>&1 | tr -d '\n')\"
+                # CFMS stand-in (0.5.17, patches/OneOSCfmsStub.java): One UI's libgui in the shared
+                # cameraserver waited 5 s for CustomFrequencyManagerService on every camera Surface
+                # (Galaxy S26 Exynos: 23 waits a session, Samsung Camera timed out). Registered only
+                # when One UI's own is not there; exits with the guest. ONEOS_GUEST_CFMS_STUB=0: off.
+                if [ \"${ONEOS_GUEST_CFMS_STUB:-1}\" = 1 ]; then
+                    ($BB nohup $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/env CLASSPATH=/data/oneos_edm_stub.dex /system/bin/app_process /system/bin OneOSCfmsStub \$PID > $STAGE/cfms_stub.log 2>&1 </dev/null &)
+                    sleep 1
+                    echo \"[UI Activator] CFMS stub: \$(head -n 1 $STAGE/cfms_stub.log 2>/dev/null | tr -d '\n' || true)\"
+                fi
                 # The Samsung camera service worker (patches/OneOSCameraWorker.java, in
                 # the same dex), which the One UI cameraserver also asks on every open:
                 # on the S25 Ultra firmware each connect waited 5 s for it and then
@@ -2483,6 +2552,38 @@ while true; do
                 ($BB nohup $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/env CLASSPATH=/data/oneos_edm_stub.dex /system/bin/app_process /system/bin OneOSScreenWatch \$PID > $STAGE/screen_watch.log 2>&1 </dev/null &)
                 sleep 1
                 echo \"[UI Activator] screen watch: \$(head -n 1 $STAGE/screen_watch.log 2>/dev/null || true)\"
+            fi
+            # Knox provider stand-in (0.5.17), OxygenOS only: One UI's calling service died at every start
+            # there (no com.sec.knox.provider2: A15, A16, A17 reports), so no SMS and no VoLTE. The guest app's
+            # KnoxProviderStub answers it; it stays off in every other system. ONEOS_GUEST_KNOX_STUB=0: off.
+            if [ $GUEST_OXYGEN = 1 ] && [ \"${ONEOS_GUEST_KNOX_STUB:-1}\" = 1 ]; then
+                $BB timeout 20 $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/pm enable com.fahadali.oneos.guest/com.fahadali.oneos.guest.KnoxProviderStub >/dev/null 2>&1 &&
+                    echo \"[UI Activator] Knox provider stand-in: on (OxygenOS)\" || echo \"[UI Activator] Knox provider stand-in: could not turn it on\"
+            fi
+            # Colour mode and warm/cool (0.5.17), Nothing OS only (patches/OneOSNtColor.java): Nothing writes them as
+            # settings for its own display hardware, which Samsung's ignores; this applies them through SurfaceFlinger
+            # (saturation for Alive, a colour matrix for the temperature). ONEOS_GUEST_NT_COLOR=0: off.
+            if [ -e $STAGE/rootfs/system_ext/framework/nt-telephony-common.jar ] && [ \"${ONEOS_GUEST_NT_COLOR:-1}\" = 1 ] && [ -f $STAGE/OneOSEdmStub.dex ] && [ ! -L $STAGE/OneOSEdmStub.dex ]; then
+                ($BB nohup $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/env CLASSPATH=/data/oneos_edm_stub.dex /system/bin/app_process /system/bin OneOSNtColor \$PID > $STAGE/nt_color.log 2>&1 </dev/null &)
+                sleep 1
+                echo \"[UI Activator] colour: \$(head -n 1 $STAGE/nt_color.log 2>/dev/null || true)\"
+            fi
+            # Essential key (0.5.17), Nothing OS only: a double press of Volume Down is Nothing's Essential key
+            # double click (Essential Space), the second press held a long press (record). A uinput key (scan code
+            # 250, switcher/native/oneos_essential_key.c): Nothing ignores injected keys for its key gestures.
+            # The power key keeps the camera. ONEOS_GUEST_ESSENTIAL_KEY=0: off.
+            if [ -e $STAGE/rootfs/system_ext/framework/nt-telephony-common.jar ] && [ \"${ONEOS_GUEST_ESSENTIAL_KEY:-1}\" = 1 ] && [ -x $STAGE/oneos_essential_key ] && [ ! -L $STAGE/oneos_essential_key ]; then
+                ($BB nohup $STAGE/oneos_essential_key \$PID \"/system/bin/sh $STAGE/data/oneos_essential_open.sh \$PID $BB\" > $STAGE/essential_key.log 2>&1 </dev/null &)
+                sleep 1
+                # The guest has its own /dev (owner's A36: the key never reached Nothing): its node goes there too, as
+                # the phone's input nodes are (system:input 0660, input_device), so the guest's input reader adds it.
+                ekn=\$(sed -n 's/^node \(event[0-9]*\) \([0-9]*\):\([0-9]*\)\$/\1 \2 \3/p' $STAGE/essential_key.log | head -n 1)
+                if [ -n \"\$ekn\" ]; then
+                    set -- \$ekn
+                    timeout 10 $BB nsenter -t \$PID -m /system/bin/sh -c \"[ -e /dev/input/\$1 ] || { mknod /dev/input/\$1 c \$2 \$3 && chown 1000:1004 /dev/input/\$1 && chmod 660 /dev/input/\$1 && chcon u:object_r:input_device:s0 /dev/input/\$1; }\" &&
+                        echo \"[UI Activator] essential key: /dev/input/\$1 made in the guest\" || echo \"[UI Activator] essential key: could not make /dev/input/\$1 in the guest\"
+                fi
+                echo \"[UI Activator] essential key: \$(grep -v '^node ' $STAGE/essential_key.log 2>/dev/null | head -n 1)\"
             fi
             # Density and fold line of the inner panel (run 43), before HOME so the
             # setup wizard starts with them. With no init of its own the guest
@@ -2970,6 +3071,18 @@ while true; do
             # earlier session made.
             gxo() { timeout 20 $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/cmd overlay \"\$@\" >/dev/null 2>&1; }
             gdim() { timeout 30 $BB nsenter -t \$PID -m /system/bin/sh /data/oneos_genv.sh /system/bin/env CLASSPATH=/data/oneos_overlay_dimen.dex /system/bin/app_process /system/bin OneOSOverlayDimen \"\$@\" 2>&1 | grep -E '^(registered|failed)' | tail -n 1; }
+            # 0.5.18, Nothing OS (reports, A35: \"screen brightness is low compared to One UI\"): Nothing keeps its
+            # slider at most at config_screenBrightnessSettingMaximumFloat 0.294 (mScreenBrightnessMaximum in every
+            # Nothing session; every other guest 1.0 on the same panels), the rest being its own phones' sunlight
+            # boost, which a Galaxy never gets. The whole range, as the other guests have it; the framework reads it
+            # at start, so from the next session on.
+            if [ -f $STAGE/data/oneos_overlay_dimen.dex ] && { [ -e $STAGE/rootfs/system_ext/framework/nt-telephony-common.jar ] || [ -e $STAGE/rootfs/system/system_ext/framework/nt-telephony-common.jar ]; }; then
+                r=\$(gdim OneOSNtBrightness android android:dimen/config_screenBrightnessSettingMaximumFloat=f:1.0)
+                case \"\$r\" in
+                    registered*) gxo enable --user 0 com.android.shell:OneOSNtBrightness && echo \"[UI Activator] Nothing brightness: whole range (from the next session)\" ;;
+                    *) echo \"[UI Activator] Nothing brightness overlay not made: \$r\" ;;
+                esac
+            fi
             # The corner radius for the guests the block below leaves out (0.4.76,
             # host_corner_radius; see where the switch saves it): ColorOS on any
             # phone, every guest on a Fold. Made after the block.
@@ -3076,11 +3189,37 @@ while true; do
                                    r=\$(gdim OneOSNtStatusBar com.android.systemui com.android.systemui:dimen/status_bar_padding_start=\$NPS com.android.systemui:dimen/status_bar_padding_end=\$NPS com.android.systemui:dimen/status_bar_padding_top=\$NPT)
                                    case \"\$r\" in registered*) OVS=\"\$OVS OneOSNtStatusBar\" ;; *) DIMS=\"\$DIMS Nothing status bar \$NPS/\$NPT px: \$r;\" ;; esac
                                fi
+                               # 0.5.17 (owner, A36): Nothing's screen-off animation closes into the power button at
+                               # physical_power_button_center_screen_location_y (620 px, Nothing's phone; One UI keeps the
+                               # same 620, so it says nothing about a Galaxy). A phone measured on the device (A36: 1050 of
+                               # 2340 px), else 45% of the height One UI runs the panel at: a Galaxy bar phone's key sits
+                               # just under its volume rocker (owner: \"universal for each device\"). Bar phones only.
+                               # Scaled to the resolution the guest runs at; its SystemUI reads it at start, so from
+                               # the next session on.
+                               PBY=''
+                               case \"$(getprop ro.product.device 2>/dev/null)\" in
+                                   a36xq) PBY=1050 ;;
+                                   *) [ $GUEST_FOLD_FORM = 0 ] && [ -n \"$HDH\" ] && PBY=\$(( $HDH * 45 / 100 )) ;;
+                               esac
+                               if [ -n \"\$PBY\" ]; then
+                                   PBY=\$(awk -v y=\"\$PBY\" -v k=\"\$SBK\" 'BEGIN { if (split(k, a, \" \") == 2 && a[2] > 0) y = y * a[1] / a[2]; print int(y + 0.5) }')
+                                   r=\$(gdim OneOSNtPowerKey com.android.systemui com.android.systemui:dimen/physical_power_button_center_screen_location_y=\$PBY)
+                                   case \"\$r\" in registered*) OVS=\"\$OVS OneOSNtPowerKey\" ;; *) DIMS=\"\$DIMS Nothing power key \$PBY px: \$r;\" ;; esac
+                               fi
                            fi ;;
                     esac
                 fi
                 ON=''
                 for o in \$OVS; do gxo enable --user 0 com.android.shell:\$o && ON=\"\$ON \$o\"; done
+                # 0.5.18 (owner, A36): Nothing's SystemUI reads the power key's place (the screen-off animation) once,
+                # when it starts, and in a guest it starts before these overlays hold: the animation went to Nothing's
+                # own 620 px every session, and right only after a SystemUI restart (owner: \"power animation good\",
+                # double tap to wake still working). Nothing OS with the power key overlay on: SystemUI restarted
+                # once, here, every session.
+                case \" \$ON \" in *\" OneOSNtPowerKey \"*)
+                    sp=\$(timeout 10 $BB nsenter -t \$PID -m /system/bin/pidof com.android.systemui 2>/dev/null)
+                    case \"\$sp\" in ''|*[!0-9\ ]*) ;; *) kill \$sp 2>/dev/null && echo \"[UI Activator] Nothing's SystemUI restarted for the power key place and status bar\" ;; esac ;;
+                esac
                 echo \"[UI Activator] status bar: One UI's cutout '\${HCS:-none}', as \$CUTU: '\${CUT:-none}', rect '\${CUTR:-none}'; height \${HSB:-?} px\${SBK:+ (\$HSBG px at the \${SBK% *} px the guest runs)}, corner radius \${HRC:-?} px; overlays on:\${ON:- none}\${DIMS:+ (not made:\$DIMS)}\"
             else
                 # No host cutout this session (ONEOS_GUEST_HOST_CUTOUT=0, or a
@@ -3090,7 +3229,7 @@ while true; do
                     case \$o in
                         OneOSCornerRadius) [ -n \"\$CRAD\" ] && continue
                             gxo disable --user 0 com.android.shell:\$o && OFF=\"\$OFF \$o\" ;;
-                        OneOSCutout|OneOSCutoutRect|OneOSStatusBarHeight|OneOSCornerPadding|OneOSNtStatusBar)
+                        OneOSCutout|OneOSCutoutRect|OneOSStatusBarHeight|OneOSCornerPadding|OneOSNtStatusBar|OneOSNtPowerKey)
                             gxo disable --user 0 com.android.shell:\$o && OFF=\"\$OFF \$o\" ;;
                     esac
                 done
@@ -3488,7 +3627,12 @@ done
 GEN=\$(cat $STAGE/tmp/softreboot.gen 2>/dev/null); PASS=\$((PASS + 1))
 echo \"[UI Activator] soft reboot of the guest (generation \$GEN): pass \$PASS, waiting for its new boot\"
 done
-" </dev/null >/data/local/tmp/ui_activator.log 2>&1 &
+"
+cat > "$STAGE/tmp/ui_activator.sh" <<UIAEOF && chmod 0700 "$STAGE/tmp/ui_activator.sh"
+$UIA
+UIAEOF
+unset UIA
+$BB sh "$STAGE/tmp/ui_activator.sh" </dev/null >/data/local/tmp/ui_activator.log 2>&1 &
 
 # Samsung CPU/GPU votes survive the host framework; capability-detected on every profile.
 # 0.4.38: only with the heat cap off (Cool down when hot, Advanced). With it on, the heat cap
@@ -3677,6 +3821,34 @@ fi
 # only between kicks; it ends itself with the return (data/oneos_rec_stop) or
 # when the guest's namespace record is gone, like the heat cap. Logged in
 # $STAGE/panel_keeper.log. ONEOS_GUEST_SF_PIN=0: not started.
+# Local HBM keeper (0.5.18): the guest lights the fingerprint spot only while a finger is on the sensor
+# (OneOSSehTouch, ~1 s); a spot still on 10 s later was left by a touch whose up never came (or by anything
+# else) and would glow on the panel until the return. Every 5 s; three readings in a row other than 0: off.
+# Logged in $STAGE/lhbm_keeper.log; ends with the return, like the panel keeper.
+rm -f "$STAGE/lhbm_keeper.log"
+if [ -w /sys/class/lcd/panel/local_hbm ]; then
+    $BB sh -c "
+    : oneos_lhbm_keeper
+    echo \$\$ > /sys/fs/cgroup/cgroup.procs 2>/dev/null
+    F=$STAGE/lhbm_keeper.log; H=/sys/class/lcd/panel/local_hbm
+    echo \"# \$(date) OneOS local HBM keeper: every 5 s, off after 3 readings in a row that are not 0\" > \$F
+    n=0; offs=0
+    while true; do
+        if [ -f $STAGE/data/oneos_rec_stop ] || [ ! -s $STAGE/guest_mntns ]; then
+            echo \"# \$(date +%T) stopped after \$offs resets\" >> \$F
+            exit 0
+        fi
+        v=\$(cat \$H 2>/dev/null)
+        case \"\$v\" in 0|'') n=0 ;; *) n=\$((n + 1)) ;; esac
+        if [ \$n -ge 3 ]; then
+            echo 0 > \$H 2>/dev/null; offs=\$((offs + 1)); n=0
+            echo \"\$(date +%T) local HBM \$v for 10+ s: off (now \$(cat \$H 2>/dev/null))\" >> \$F
+        fi
+        sleep 5
+    done
+    " </dev/null >/dev/null 2>&1 &
+    echo "Local HBM keeper started (fingerprint spot off when left on)"
+fi
 rm -f "$STAGE/panel_keeper.log"
 if [ "$GUEST_OPLUS" != 1 ] && [ "${ONEOS_GUEST_SF_PIN:-1}" != 0 ] && [ -r /sys/class/lcd/panel/vrr ]; then
     $BB sh -c "
@@ -3771,6 +3943,20 @@ if [ "$RETURN_MAX" -gt 0 ]; then
                     setprop oneos.guest.powerctl \"app:\$r\"
                     continue
                 fi
+                # Record full logs from now (0.5.17): the same capture a session with Full
+                # session logs on starts, from this moment (no head/: the boot is gone from
+                # the buffers by now); full_logs_mid.log in the stage says when, for the report.
+                # Only with ONEOS_LOGCAT=1, and only once: a capture that runs is left alone.
+                if [ -f $GUEST_FULLLOGS_REQ ] && [ ! -L $GUEST_FULLLOGS_REQ ]; then
+                    rm -f $GUEST_FULLLOGS_REQ
+                    if [ \"${ONEOS_LOGCAT:-1}\" = 1 ] && ! pgrep -f '^logcat .*$LOGS/boot.log' >/dev/null 2>&1; then
+                        mkdir -p $LOGS
+                        $BB setsid logcat -b all -v threadtime -f $LOGS/boot.log -r 32768 -n 24 </dev/null >/dev/null 2>&1 &
+                        echo \"\$(date) Full session logs turned on in the guest's OneOS app\" >> $STAGE/full_logs_mid.log
+                        echo \"\$(date) Full session logs turned on in the guest's OneOS app\"
+                    fi
+                    if [ \"${ONEOS_LOGCAT:-1}\" = 1 ] && [ -d $STAGE/data/oneos_bootui ]; then echo 1 > $FULLLOGS_STATE && chmod 644 $FULLLOGS_STATE; fi
+                fi
                 if [ -f $GUEST_RESTART_REQ ] && [ ! -L $GUEST_RESTART_REQ ]; then
                     rm -f $GUEST_RESTART_REQ
                     setprop oneos.guest.powerctl ksud:soft-reboot
@@ -3852,7 +4038,10 @@ if [ "$RETURN_MAX" -gt 0 ]; then
                 done
                 echo \"\$(date) logcat capture: \$(ls $LOGS/head 2>/dev/null | wc -l) files of the boot kept in $LOGS/head (hard links)\"
             fi
-            if [ -n \"\$dname\" ]; then
+            # 0.5.18: the snapshot runs beside the watcher, not in its way (A36 fresh Nothing OS: Volume Up +
+            # Volume Down held at 17:19:34, the 90 s snapshot's stack dumps took the watcher until 17:20:12 and
+            # the owner, seeing nothing happen, held them again). A request is then taken within a second.
+            if [ -n \"\$dname\" ]; then (
                 SFP=\$(pidof surfaceflinger | awk '{print \$1}')
                 if [ -n \"\$SFP\" ]; then
                     D=$STAGE/diag_\$dname; mkdir -p \$D
@@ -4041,7 +4230,7 @@ if [ "$RETURN_MAX" -gt 0 ]; then
                     fi
                     echo \"\$(date) display diagnostics saved in \$D\"
                 fi
-            fi
+            ) </dev/null & fi
             # A running surfaceflinger can still show nothing: when the composer
             # rejects its frames the panel keeps the last host frame.
             # The guest framework is gone for good once its zygote died: the

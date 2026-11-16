@@ -123,6 +123,9 @@ def recent_reports(db, days):
     rows = defaultdict(lambda: {"n": 0, "home": 0, "tried": 0, "items": defaultdict(lambda: [0, 0]), "last": "", "version": ""})
     if not os.path.exists(db):
         return rows
+    # One report per session (the newest): a session sent again, or a scripted client sending one session hundreds
+    # of times (2026-11-16: 531 reports of one A35 session), counts once.
+    latest = {}
     for line in open(db):
         if not line.strip():
             continue
@@ -130,6 +133,11 @@ def recent_reports(db, days):
         c = r.get("checklist")
         if not c or not r.get("sessionId") or (r.get("receivedAt") or "")[:10] < since:
             continue
+        sid = r["sessionId"]
+        if sid not in latest or (r.get("receivedAt") or "") >= (latest[sid].get("receivedAt") or ""):
+            latest[sid] = r
+    for r in latest.values():
+        c = r["checklist"]
         key = ((r.get("phone") or {}).get("profile"), r.get("image"))
         row = rows[key]
         row["n"] += 1
@@ -466,7 +474,7 @@ def main():
     ap.add_argument("--db", default="out/reports/db/reports.jsonl")
     ap.add_argument("--md", default="docs/devices.md")
     ap.add_argument("--filters", default="out/telegram/rose_filters.txt")
-    ap.add_argument("--days", type=int, default=10)
+    ap.add_argument("--days", type=int, default=400)  # owner 11-15: every report counts (10 days hid phones' working systems)
     ap.add_argument("--per-phone", action="store_true", help="one Rose reply per phone instead of one per series")
     ap.add_argument("--rich", default="", help="also write the phones as JSON for rose_rich.py (Premium emoji, quotes)")
     ap.add_argument("--link", default="", help="the public docs/devices.md URL, once published")
